@@ -1,0 +1,101 @@
+﻿==============================================================================
+# PLANT PHYLOGENETIC COMMUNITY ANALYSIS SCRIPT
+# ==============================================================================
+
+# 1. INSTALL AND LOAD PACKAGES
+# V.PhyloMaker2 builds the plant tree; picante runs the community metrics
+required_pkgs <- c("picante", "ape", "vegan", "devtools")
+new_pkgs <- required_pkgs[!(required_pkgs %in% installed.packages()[, "Package"])]
+if(length(new_pkgs)) install.packages(new_pkgs)
+
+if(!requireNamespace("V.PhyloMaker2", quietly = TRUE)) {
+  devtools::install_github("jinyizju/V.PhyloMaker2")
+}
+
+library(V.PhyloMaker2)
+library(picante)
+library(ape)
+library(vegan)
+
+# 2. LOAD DATA
+# Load your formatted plant list and your site presence/absence matrix
+species_list <- read.csv("plant_species.csv", header = TRUE)
+comm_matrix  <- read.csv("community_matrix.csv", row.names = 1)
+
+# 3. BUILD THE PLANT PHYLOGENY
+print("Building plant phylogenetic tree...")
+
+# Corrected mega-tree datasets to include the '.TPL' suffix, and changed 'scenario = 3' to 'scenarios = "S3"'
+plant_tree_output <- phylo.maker(
+  sp.list = species_list, 
+  tree = GBOTB.extended.TPL, 
+  nodes = nodes.info.1.TPL, 
+  scenarios = "S3"
+)
+
+# Extract scenario 3 output
+plant_tree <- plant_tree_output$scenario.3
+
+# Save the generated tree for future use
+write.tree(plant_tree, "plant_generated_tree.tre")
+
+# 4. ALIGN TREE AND COMMUNITY MATRIX
+# Cleans data so only species present in both the tree and matrix remain
+cleaned_data <- match.phylo.comm(plant_tree, comm_matrix)
+phy_clean    <- cleaned_data$phy
+comm_clean   <- cleaned_data$comm
+
+# 5. CALCULATE COPHENETIC DISTANCE Matrix
+plant_distances <- cophenetic(phy_clean)
+
+# 6. RUN NULL MODEL METRICS
+# abundance.weighted = FALSE treats data as presence/absence
+print("Calculating Standardized Effect Size for MPD (NRI)...")
+ses_mpd_results <- ses.mpd(comm_clean, plant_distances, null.model = "taxa.labels", runs = 999, abundance.weighted = FALSE)
+
+print("Calculating Standardized Effect Size for MNTD (NTI)...")
+ses_mntd_results <- ses.mntd(comm_clean, plant_distances, null.model = "taxa.labels", runs = 999, abundance.weighted = FALSE)
+
+# 7. FORMAT FINAL METRICS
+# Inverting the sign converts SES to NRI and NTI
+plant_community_results <- data.frame(
+  Site = rownames(comm_clean),
+  Richness = ses_mpd_results$ntaxa,
+  NRI = ses_mpd_results$mpd.obs.z * -1,
+  NRI_p_value = ses_mpd_results$mpd.obs.p,
+  NTI = ses_mntd_results$mntd.obs.z * -1,
+  NTI_p_value = ses_mntd_results$mntd.obs.p
+)
+
+# 8. EXPORT OUTPUT
+write.csv(plant_community_results, "plant_phylogenetic_results.csv", row.names = FALSE)
+print("Analysis successfully completed!")
+
+
+#Interpreting Botanical Results
+
+#    High NRI / NTI (> 0): Phylogenetic Clustering. Your plant community consists of closely
+#related species. This typically indicates strong environmental filtering (e.g., only plants with #pecific drought or frost tolerances can survive at that site).
+#  Low NRI / NTI (< 0): Phylogenetic Overdispersion. Your plant community consists of #distantly related species. This typically indicates competitive exclusion or high niche #differentiation (e.g., closely related plants cannot coexist because they fight for the exact same soil #nutrients).
+
+#With a community matrix, a species trait/taxonomy list, and a phylogenetic tree, you can expand your #analysis into phylogenetic beta-diversity, evolutionary isolation, and trait-based functional ecology.
+
+#1. Phylogenetic Beta-Diversity (Turnover Between Plots)
+#Instead of looking at a single plot's structure, you can calculate how much evolutionary history is #shared or lost between different locations.
+
+#Phylogenetic Sorensen / Jaccard Index (picante::phylo.sor): Measures the proportion of phylogenetic #branch lengths shared between two communities.
+#UniFrac (picante::unifrac): Calculates the evolutionary distance between communities. It determines if #differences are driven by specific lineages or random chance.
+#Phylogenetic Turnover Components (vegan::comdist or picante::comdistnt): Calculates the Mean Pairwise #Distance (MPD) or Mean Nearest Taxon Distance (MNTD) between communities rather than within them.
+
+# Example: Calculate phylogenetic beta-diversity between your plots
+phylo_dist_between_plots <- comdist(comm_clean, plant_distances, abundance.weighted = FALSE)
+
+# Visualise using non-metric multidimensional scaling
+pcoa_results <- cmdscale(phylo_dist_between_plots)
+plot(pcoa_results, main = "Phylogenetic Space Beta-Diversity Mapping")
+# Add labels (e.g., sample names from row names of the results)
+text(pcoa_results, labels = rownames(pcoa_results), pos = 3, cex = 0.7)
+
+#Print tree 
+plot(plant_tree_output$scenario.3, type = "phylogram", cex = 0.6)
+
